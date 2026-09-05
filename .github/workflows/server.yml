@@ -44,25 +44,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y playit
 
-      - name: Claim Playit agent
+      - name: Configure Playit permissions
         run: |
-          echo "========================================================"
-          echo "PLAYIT SETUP"
-          echo "Abra o link de CLAIM que aparecer abaixo."
-          echo "Você terá alguns minutos para aceitar o agent."
-          echo "========================================================"
+          # The Playit package runs playitd as a service.
+          # Give the GitHub runner access to its IPC socket.
+          sudo usermod -aG playit "$USER"
 
-          timeout 600 playit setup || true
+          sudo systemctl enable playit
+          sudo systemctl restart playit
 
-      - name: Start Playit
+          sleep 3
+
+          echo "===== PLAYIT SERVICE ====="
+          sudo systemctl status playit --no-pager || true
+
+      - name: Claim Playit Agent
         run: |
-          nohup playit > "$GITHUB_WORKSPACE/playit.log" 2>&1 &
-          echo $! > "$GITHUB_WORKSPACE/playit.pid"
+          echo "======================================================"
+          echo "        PLAYIT.GG - AGENT SETUP"
+          echo "======================================================"
+          echo ""
+          echo "Abra o link de claim que aparecer abaixo."
+          echo "Faça login no Playit e aceite o novo Agent."
+          echo ""
+          echo "IMPORTANTE: deixe esta etapa aberta enquanto faz isso."
+          echo "======================================================"
+          echo ""
 
-          sleep 10
-
-          echo "===== PLAYIT LOG ====="
-          cat "$GITHUB_WORKSPACE/playit.log" || true
+          sg playit -c "playit setup"
 
 
       - name: Download Biohazard Server Pack
