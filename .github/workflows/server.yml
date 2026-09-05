@@ -64,22 +64,28 @@ jobs:
           echo "===== PLAYIT LOG ====="
           cat "$GITHUB_WORKSPACE/playit.log" || true
 
+
       - name: Download Biohazard Server Pack
         run: |
           mkdir -p server
           cd server
 
+          echo "Downloading Biohazard 0.4.6 Server Pack directly from ForgeCDN..."
+
           curl -L \
             --fail \
             --retry 5 \
             --retry-delay 5 \
-            -A "Mozilla/5.0" \
+            --connect-timeout 30 \
+            --progress-bar \
             -o biohazard.zip \
-            "https://www.curseforge.com/minecraft/modpacks/biohazard-project-genesis/download/8688479"
+            "https://mediafilez.forgecdn.net/files/8688/479/Biohazard_Beta_0.4.6_server_pack.zip"
 
+          echo ""
           echo "===== DOWNLOADED FILE ====="
           ls -lh biohazard.zip
 
+          echo ""
           echo "===== FILE TYPE ====="
           file biohazard.zip
 
