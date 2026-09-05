@@ -1,0 +1,235 @@
+name: Biohazard Minecraft Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Show runner resources
+        run: |
+          echo "===== CPU ====="
+          nproc
+          echo "===== MEMORY ====="
+          free -h
+          echo "===== DISK ====="
+          df -h
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl wget
+
+      - name: Install Playit
+        run: |
+          curl -SsL https://playit-cloud.github.io/ppa/key.gpg \
+            | gpg --dearmor \
+            | sudo tee /etc/apt/trusted.gpg.d/playit.gpg >/dev/null
+
+          echo "deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./" \
+            | sudo tee /etc/apt/sources.list.d/playit-cloud.list
+
+          sudo apt-get update
+          sudo apt-get install -y playit
+
+      - name: Claim Playit agent
+        run: |
+          echo "========================================================"
+          echo "PLAYIT SETUP"
+          echo "Abra o link de CLAIM que aparecer abaixo."
+          echo "Você terá alguns minutos para aceitar o agent."
+          echo "========================================================"
+
+          timeout 600 playit setup || true
+
+      - name: Start Playit
+        run: |
+          nohup playit > "$GITHUB_WORKSPACE/playit.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/playit.pid"
+
+          sleep 10
+
+          echo "===== PLAYIT LOG ====="
+          cat "$GITHUB_WORKSPACE/playit.log" || true
+
+      - name: Download Biohazard Server Pack
+        run: |
+          mkdir -p server
+          cd server
+
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 5 \
+            -A "Mozilla/5.0" \
+            -o biohazard.zip \
+            "https://www.curseforge.com/minecraft/modpacks/biohazard-project-genesis/download/8688479"
+
+          echo "===== DOWNLOADED FILE ====="
+          ls -lh biohazard.zip
+
+          echo "===== FILE TYPE ====="
+          file biohazard.zip
+
+      - name: Verify Server Pack
+        run: |
+          cd server
+
+          if ! unzip -t biohazard.zip >/dev/null 2>&1; then
+            echo "ERROR: CurseForge did not return the ZIP correctly."
+            echo "Downloaded file info:"
+            file biohazard.zip
+            ls -lh biohazard.zip
+            exit 1
+          fi
+
+          echo "Server Pack ZIP is valid."
+
+      - name: Extract Biohazard
+        run: |
+          cd server
+
+          unzip -q biohazard.zip
+          rm biohazard.zip
+
+          echo "===== TOP LEVEL ====="
+          find . -maxdepth 2 -type f | sort | head -200
+
+      - name: Fix nested server directory
+        run: |
+          cd server
+
+          DIR_COUNT=$(find . -mindepth 1 -maxdepth 1 -type d | wc -l)
+          FILE_COUNT=$(find . -mindepth 1 -maxdepth 1 -type f | wc -l)
+
+          if [ "$DIR_COUNT" -eq 1 ] && [ "$FILE_COUNT" -eq 0 ]; then
+            INNER=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
+
+            echo "Single nested directory detected: $INNER"
+
+            shopt -s dotglob
+            mv "$INNER"/* .
+            rmdir "$INNER"
+          fi
+
+      - name: Accept EULA
+        run: |
+          cd server
+          echo "eula=true" > eula.txt
+
+      - name: Optimize server.properties
+        run: |
+          cd server
+
+          touch server.properties
+
+          set_property () {
+            KEY="$1"
+            VALUE="$2"
+
+            if grep -q "^${KEY}=" server.properties; then
+              sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" server.properties
+            else
+              echo "${KEY}=${VALUE}" >> server.properties
+            fi
+          }
+
+          set_property server-ip ""
+          set_property server-port "25565"
+          set_property view-distance "7"
+          set_property simulation-distance "5"
+          set_property max-players "8"
+          set_property network-compression-threshold "256"
+          set_property sync-chunk-writes "false"
+          set_property enable-status "true"
+
+          echo "===== SERVER PROPERTIES ====="
+          cat server.properties
+
+      - name: Find launcher
+        run: |
+          cd server
+
+          echo "===== LAUNCH FILES ====="
+
+          find . -maxdepth 3 -type f \
+            \( \
+              -name "run.sh" \
+              -o -name "start.sh" \
+              -o -name "*.jar" \
+              -o -name "user_jvm_args.txt" \
+            \) \
+            -print | sort
+
+      - name: Configure RAM
+        run: |
+          cd server
+
+          if [ -f user_jvm_args.txt ]; then
+            cp user_jvm_args.txt user_jvm_args.txt.bak
+
+            sed -i '/^-Xms/d' user_jvm_args.txt
+            sed -i '/^-Xmx/d' user_jvm_args.txt
+
+            cat >> user_jvm_args.txt <<'EOF'
+          -Xms8G
+          -Xmx12G
+          -XX:+UseG1GC
+          -XX:+ParallelRefProcEnabled
+          -XX:MaxGCPauseMillis=100
+          -XX:+DisableExplicitGC
+          EOF
+
+            echo "===== JVM ARGS ====="
+            cat user_jvm_args.txt
+          fi
+
+      - name: Start Biohazard Server
+        working-directory: server
+        run: |
+          echo "========================================================"
+          echo "STARTING BIOHAZARD: PROJECT GENESIS"
+          echo "Minecraft 1.20.1 / Forge"
+          echo "========================================================"
+
+          if [ -f run.sh ]; then
+            chmod +x run.sh
+            sed -i 's/\r$//' run.sh
+            ./run.sh nogui
+
+          elif [ -f start.sh ]; then
+            chmod +x start.sh
+            sed -i 's/\r$//' start.sh
+            ./start.sh
+
+          else
+            FORGE_JAR=$(find . -maxdepth 2 -type f -name "forge-*.jar" | head -1)
+
+            if [ -n "$FORGE_JAR" ]; then
+              java \
+                -Xms8G \
+                -Xmx12G \
+                -XX:+UseG1GC \
+                -XX:+ParallelRefProcEnabled \
+                -XX:MaxGCPauseMillis=100 \
+                -XX:+DisableExplicitGC \
+                -jar "$FORGE_JAR" nogui
+
+            else
+              echo "ERROR: Nenhum launcher Forge encontrado."
+              find . -maxdepth 3 -type f | sort
+              exit 1
+            fi
+          fi
